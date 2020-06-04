@@ -370,7 +370,7 @@ docker images
 
 Запустим контейнер Docker с тестовым приложением:
 ```bash
-docker run --name helloworld-app-container -p 8080:80 -d helloworld-app
+docker run --name helloworld-app-container -p 8080:80 -d helloworld-app:v1
 ```
 
 Изучим запущенный контейнеры:
