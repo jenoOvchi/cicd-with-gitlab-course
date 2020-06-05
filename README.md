@@ -1222,6 +1222,8 @@ kubectl describe pod $(kubectl get pods | grep 0/1 | awk '{print $1}')
 gcloud compute firewall-rules delete svc-rule
 ```
 
+## Topic 7: Application Configuration
+
 Создадим словарь конфигурации с двумя записями:
 ```bash
 kubectl create configmap appconfig --from-literal=key1=value1 --from-literal=key2=value2
@@ -1482,7 +1484,172 @@ kubectl delete replicaset myreplicaset
 #### Задание:
 Создать секрет со строкой подключения к БД и передать его в виде переменной окружения в тестовое приложение.
 
-## Topic 7: Managing Data in the Kubernetes Cluster
+## Topic 8: GitLab Integration
+
+Настроим деплой приложений в Gitlab. Для этого перейдём на виртуальную машину gitlab-runner и установим kubectl:
+```bash
+curl -LO https://storage.googleapis.com/kubernetes-release/release/`curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt`/bin/linux/amd64/kubectl
+curl -LO https://storage.googleapis.com/kubernetes-release/release/v1.18.0/bin/linux/amd64/kubectl
+chmod +x ./kubectl
+sudo mv ./kubectl /usr/local/bin/kubectl
+kubectl version --client
+```
+
+Настроим Kubeconfig. Для этого в выполним в Cloud Shell следующие команды:
+```bash
+kubectl get secrets
+```
+
+Скопируем токен с именем default-token-xxxxx и выполним следующую команду, подставис в неё имя токена:
+```bash
+kubectl get secret <secret name> -o jsonpath="{['data']['ca\.crt']}" | base64 --decode
+```
+
+Скопируем сертификат перейдём на виртуальную машину gitlab-runner и сохраним его в файле:
+```bash
+sudo su gitlab-runner
+vi ca.crt
+```
+
+Выполним в Cloud Shell следующую команду:
+```bash
+kubectl cluster-info | grep 'Kubernetes master' | awk '/http/ {print $NF}' 
+```
+
+Скопируем ссылку на API Kubernetes и выполним следующую команду на виртуальной машине gitlab-runner:
+```bash
+kubectl config set-cluster kubernetes --server=<server-url> --certificate-authority=ca.crt --embed-certs=true
+```
+
+Создадим сервисный аккаунт для GitLab. Выполним в Cloud Shell следующие команды:
+```bash
+vi gitlab-admin-service-account.yaml
+```
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitlab-admin
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: gitlab-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: gitlab-admin
+  namespace: kube-system
+```
+```bash
+kubectl apply -f gitlab-admin-service-account.yaml
+```
+```bash
+kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep gitlab-admin | awk '{print $1}')
+```
+
+Добавим пользователя для конфигурации kubectl, используя токен из предыдущего вывода:
+```bash
+kubectl config set-credentials gitlab-admin --token=<token>
+```
+
+Зададим контекст для конфигурации kubectl:
+```bash
+kubectl config set-context kubernetes --cluster=kubernetes --user=gitlab-admin --namespace=default
+```
+
+Используем заданный контекст для конфигурации kubectl:
+```bash
+kubectl config use-context kubernetes
+```
+
+Проверим, что kubectl сконфигурирован корректно:
+```bash
+kubectl get nodes
+```
+
+Переходим в GitLab в проект "Test Project" и создаём в проекте папку "k8s". В ней создаём файлы для деплоя в Kubernetes:
+
+- test-project-deployment.yaml
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-project
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-project
+  template:
+    metadata:
+      name: test-project
+      labels:
+        app: test-project
+    spec:
+      containers:
+      - name: main
+        image: $CI_REGISTRY/cicd/test-project:$CI_PIPELINE_IID
+        ports:
+        - containerPort: 80
+```
+
+- test-project-svc.yaml
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-project-nodeport
+spec:
+  type: NodePort
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+    nodePort: 30080
+  selector:
+    app: test-project
+```
+
+Обновляем пайплайн:
+```yaml
+stages:
+  - test
+  - package
+  - deploy
+
+test:
+  stage: test
+  script:
+  - go clean
+  - go test
+
+package:
+  stage: package
+  before_script:
+  - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+  - docker build -t $CI_REGISTRY/cicd/test-project:$CI_PIPELINE_IID .
+  - docker push $CI_REGISTRY/cicd/test-project:$CI_PIPELINE_IID
+
+deploy:
+  stage: deploy
+  before_script:
+  - sed -i "s/\$CI_REGISTRY/$CI_REGISTRY/g" ./k8s/test-project-deployment.yaml
+  - sed -i "s/\$CI_PIPELINE_IID/$CI_PIPELINE_IID/g" .k8s/test-project-deployment.yaml
+  script:
+  - kubectl apply -f ./k8s
+```
+
+Проверяем что приложение успешно задеплоилось.
+
+## Topic 9: Managing Data in the Kubernetes Cluster
 
 Создаём диск в облаке для размещения постоянного тома:
 ```bash
@@ -1842,7 +2009,7 @@ gcloud compute disks delete --zone=$(gcloud container clusters list | grep -v NA
 #### Задание:
 Развернуть Redis в виде StatefulSet с томом в директории, в которой хранятся его данные. Сохранить данные в Redis, удалить под Redis и проверить, что после запуска нового пода данные вновь доступны.
 
-## Topic 8: Securing the Kubernetes Cluster
+## Topic 10: Securing the Kubernetes Cluster
 
 Изучим имеющиеся сервисные аккаунты пространства имён "default":
 ```bash
@@ -2075,8 +2242,6 @@ kubectl delete ns web
 #### Задание:
 Создать отдельные Service Account для redis и тестового приложения и добавить в их Deployment и StatefulSet использование данных аккаунтов вместо аккаунтов по умолчанию.
 
-## Topic 9: GitLab Integration
-
 Создадим сервисного пользователя для доступа к реестру образов Docker GitLab из Kubernetes. Для этого переходим в Web интерфейс GitLab с административными правами и нажимаем на кнопку "Admin Area", для создания пользователя нажимаем на кнопку "New User", в поле "Name" вписываем полное имя нового пользователя "Kubernetes", в поле "Username" вписываем имя нового пользователя в рамках Gitlab "kubernetes", в поле "Email" вписываем вымышленный почтовый ящик нового пользователя "k8s@gitlab.local" и нажимаем на кнопку "Create user".
 
 Требуется задать пароль вручную. Для этого нажимаем на кнопку "Edit" и в полях "Password" и "Password confirmation" вписываем временный пароль "Q!W@e3r4" и нажимаем на кнопку "Save changes". После этого копируем ссылку на GitLab и открываем её в другом браузере/вкладке в режиме инкогнито. Вводим логин "kubernetes" и пароль "Q!W@e3r4" и переходим на форму смены временного пароля. Вводим в поле "Current password" текущий пароль "Q!W@e3r4", в поля "New password" и "Password confirmation" вводим новый пароль "!QAZ2wsx" и нажимаем на кнопку "Set new password". После этого мы оказываемся на странице нового пользователя в GitLab (возможно придётся пройти процедуру авторизации заново).
@@ -2159,7 +2324,7 @@ kubectl get pods -o wide
 Проверим доступность развёрнутого приложения, вызвав из модуля "busybox" службу "test-project-pod" по HTTP:
 ```bash
 kubectl exec busybox -- curl test-project-pod:80
-```
+``` 
 
 Удалим созданные ресурсы:
 ```bash
