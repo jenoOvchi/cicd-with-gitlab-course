@@ -1642,7 +1642,7 @@ deploy:
   stage: deploy
   before_script:
   - sed -i "s/\$CI_REGISTRY/$CI_REGISTRY/g" ./k8s/test-project-deployment.yaml
-  - sed -i "s/\$CI_PIPELINE_IID/$CI_PIPELINE_IID/g" .k8s/test-project-deployment.yaml
+  - sed -i "s/\$CI_PIPELINE_IID/$CI_PIPELINE_IID/g" ./k8s/test-project-deployment.yaml
   script:
   - kubectl apply -f ./k8s
 ```
